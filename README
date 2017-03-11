@@ -1,0 +1,133 @@
+####################################################################################
+## Copyright (c) 2016, University of British Columbia (UBC)  All rights reserved. ##
+##                                                                                ##
+## Redistribution  and  use  in  source   and  binary  forms,   with  or  without ##
+## modification,  are permitted  provided that  the following conditions are met: ##
+##   * Redistributions   of  source   code  must  retain   the   above  copyright ##
+##     notice,  this   list   of   conditions   and   the  following  disclaimer. ##
+##   * Redistributions  in  binary  form  must  reproduce  the  above   copyright ##
+##     notice, this  list  of  conditions  and the  following  disclaimer in  the ##
+##     documentation and/or  other  materials  provided  with  the  distribution. ##
+##   * Neither the name of the University of British Columbia (UBC) nor the names ##
+##     of   its   contributors  may  be  used  to  endorse  or   promote products ##
+##     derived from  this  software without  specific  prior  written permission. ##
+##                                                                                ##
+## THIS  SOFTWARE IS  PROVIDED  BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" ##
+## AND  ANY EXPRESS  OR IMPLIED WARRANTIES,  INCLUDING,  BUT NOT LIMITED TO,  THE ##
+## IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE ##
+## DISCLAIMED.  IN NO  EVENT SHALL University of British Columbia (UBC) BE LIABLE ##
+## FOR ANY DIRECT,  INDIRECT,  INCIDENTAL,  SPECIAL,  EXEMPLARY, OR CONSEQUENTIAL ##
+## DAMAGES  (INCLUDING,  BUT NOT LIMITED TO,  PROCUREMENT OF  SUBSTITUTE GOODS OR ##
+## SERVICES;  LOSS OF USE,  DATA,  OR PROFITS;  OR BUSINESS INTERRUPTION) HOWEVER ##
+## CAUSED AND ON ANY THEORY OF LIABILITY,  WHETHER IN CONTRACT, STRICT LIABILITY, ##
+## OR TORT  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE ##
+## OF  THIS SOFTWARE,  EVEN  IF  ADVISED  OF  THE  POSSIBILITY  OF  SUCH  DAMAGE. ##
+####################################################################################
+
+####################################################################################
+## interleaved FIFO for clock-domain crossing -  synthesis & simulation framework ##
+## Ameer Abdelhadi (ameer.abdelhadi@gmail.com) & Mark Greenstreet (mrg@cs.ubc.ca) ##
+## Cell-based interleaved FIFO :: The University of British Columbia :: Nov. 2016 ##
+####################################################################################
+
+* This package includes a complete design framework for an interleaved cell-based
+  FIFO for clock-domain crossing.
+  - For full design description, please refer to the following paper:
+    A. M.S. Abdelhadi and M. R. Greenstreet, "Interleaved Architectures for High-Throughput
+    Synthesizable Synchronization FIFOs," Proceedings of the 2017 IEEE International
+    Symposium on Asynchronous Circuits and Systems (ASYNC '2017)
+* A complete RTL2GDS flow is supported, including logic synthesis, place and route,
+  static timing analysis, power estimates and gate-level simulation with
+  state-of-the-art commercial tools and design library. 
+* Modify env.cts for your design, CAD and environment variables
+* The flow allows multiple designs using a single command-line. The following
+  parameters can be configured directly in the command line: sender/receiver
+  protocols, FIFO stages, data widths, and freq's. Choosing several values for each
+  parameter will generate several design configurations.
+  - Please refer to design flow script: ./scr/do for more information.
+
+####################################################################################
+##                         Directories and files structure                        ##
+####################################################################################
+
+<design> = "{sender type}2{receiver type}_{FIFO stages}s.{data width}b_{freq}MHz"
+
+- $RUNDIR: Design home directory
+  - README : This file
+  - env.cts: Defines design & environment variables; Setups ASIC synthesis CAD tools
+  - res.rep: Final results report / plain text format
+  - res.csv: Final results report / csv   text format
+  - do.log : 'do' script log file
+  - $SCRDIR (scr/): Scripts directory
+    - do       : RTL 2 GDS ASIC Synthesis Design Flow Manager
+    - dve.tcl  : DVE Configuration to Show  VCD Waveform
+    - pnr.ictcl: Place and route with Synopsys IC Compiler
+    - pnr.entcl: Place and route with Cadence SoC Encounter
+    - pwr.pptcl: Power estimates with Synopsys Prime Time
+    - res.pl   : Final report generator
+    - sta.pttcl: Static timing analysis with Synopsys Prime Time
+    - stt.pl   : Generates netlist statistic data
+    - syn.dctcl: Logic synthesis with Synopsys Design Compiler
+  - $RTLDIR (rtl/): RTL directory
+    - fifo_tb.v: gate-level-simulation testbench module
+    - fifo.v   : fifo top-level module
+    - config.h : Generated by scr/do; contains design configuraion
+  - $REPDIR (rep/): Design reports directory
+    - <design>.check_design.precompile.syn.rep         : Synopsys design-compiler logic synthesis: Check pre-compile design
+    - <design>.check_design.postcompile.syn.rep        : Synopsys design-compiler logic synthesis: Check post-compile design
+    - <design>.report_clocks.syn.rep                   : Synopsys design-compiler logic synthesis: Report design clocks
+    - <design>.report_constraint.syn.rep               : Synopsys design-compiler logic synthesis: Report design constrains
+    - <design>.report_port.syn.rep                     : Synopsys design-compiler logic synthesis: Report design ports
+    - <design>.report_area.syn.rep                     : Synopsys design-compiler logic synthesis: Report design area
+    - <design>.report_cell.syn.rep                     : Synopsys design-compiler logic synthesis: Report design used cells and area
+    - <design>.report_design.syn.rep                   : Synopsys design-compiler logic synthesis: Report design (general)
+    - <design>.report_power.syn.rep                    : Synopsys design-compiler logic synthesis: Report design power
+    - <design>.report_ref.syn.rep                      : Synopsys design-compiler logic synthesis: Report design cell reference statistics
+    - <design>.report_resources.syn.rep                : Synopsys design-compiler logic synthesis: Report design resources sharing
+    - <design>.report_timing.syn.rep                   : Synopsys design-compiler logic synthesis: Report design timing
+    - <design>.cellStatistics.pnr.rep                  : Cell statistics report
+    - <design>.syncStatistics.pnr.rep                  : Synchronizer cell statistics report
+    - <design>.runtime.rep                             : Report complete design runtime
+    - do.history                                       : History of 'do' commands
+  - $LOGDIR (log/): Run logs directory
+    - <design>.syn.log    : Synopsys design-compile logic synthesis run log
+    - <design>.pnr.log    : Synopsys IC Compiler place & route run log
+    - <design>.sta.log    : Synopsys PrimeTime static timing analysis run log
+    - <design>.emp.sim.log: NC-Verilog gate-level-simulation (almost empty occupancy fifo test) run log
+    - <design>.mid.sim.log: NC-Verilog gate-level-simulation (almost middle occupancy fifo test) run log
+    - <design>.fll.sim.log: NC-Verilog gate-level-simulation (almost full occupancy fifo test) run log
+    - <design>.fst.sim.log: NC-Verilog gate-level-simulation (fast mode fifo test) run log
+    - <design>.rnd.sim.log: NC-Verilog gate-level-simulation (random mode fifo test) run log
+    - <design>.pwr.log    : Synopsys PrimeTime power estimates run log
+  - $SIMDIR (sim/): Logic simulation related files
+    - <design>.EMP.vcd: VCD (value change dump) for back-annotated gate-level-simulation (almost empty occupancy fifo test)
+    - <design>.MID.vcd: VCD (value change dump) for back-annotated gate-level-simulation (almost middle occupancy fifo test)
+    - <design>.FLL.vcd: VCD (value change dump) for back-annotated gate-level-simulation (almost full occupancy fifo test)
+    - <design>.FST.vcd: VCD (value change dump) for back-annotated gate-level-simulation (fast mode fifo test)
+    - <design>.RND.vcd: VCD (value change dump) for back-annotated gate-level-simulation (random mode fifo test)
+  - $STADIR (sta/): Static Timing Analysis (STA) related files
+    - <design>.sdf                   : SDF (Standard delay format) for back-annotation
+    - <design>.pnr.sdf               : SDF (Standard delay format) for back-annotation
+    - <design>.sdc                   : SDC (Synopsys design constraints) file, for timing consgtraints
+    - <design>.references.rep        : Design cell reference statistics (post-layout netlist)
+    - <design>.timing.all.rep        : A timing report generated by Synopsys PrimeTime for all timing paths
+    - <design>.timing.clk_get.rep    : A timing report generated by Synopsys PrimeTime for paths start in clk_get clock domain
+    - <design>.timing.clk_put.rep    : A timing report generated by Synopsys PrimeTime for paths start in clk_put clock domain
+    - <design>.timing.datain.rep     : A timing report generated by Synopsys PrimeTime for paths start from datain
+    - <design>.timing.dataout.rep    : A timing report generated by Synopsys PrimeTime for paths end with dataout
+    - <design>.timing.datav.rep      : A timing report generated by Synopsys PrimeTime for paths end with datav
+    - <design>.timing.req_get.rep    : A timing report generated by Synopsys PrimeTime for paths start with req_get
+    - <design>.timing.req_put.rep    : A timing report generated by Synopsys PrimeTime for paths start with req_put
+    - <design>.timing.spaceav.rep    : A timing report generated by Synopsys PrimeTime for paths end with sapceac
+  - $RCEDIR (rce/): RC extraction related files directory
+    - <design>.dspf: DSPF RC extraction formation gnerated by Synopsys IC Compiler
+    - <design>.spef: SPEF RC extraction formation gnerated by Synopsys IC Compiler
+  - $CTSDIR (cts/): Clock Tree Synthesis (CTS) related files
+  - $NETDIR (net/): Netlists directory
+    - <design>.syn.vh: Design netlist produced by Synopsys design-compile logic synthesis
+    - <design>.pnr.vh: Design netlist produced by Synopsys IC Compiler place & route
+    - <design>.sim.vh: Design netlist for gate-level-simulation (GDS)
+  - $PWRDIR (pwr/): Power estimates directory
+    - <design>.pwr.rep: A power estimates report generated by Synopsys PrimeTime
+  - $GDSDIR (gds/): Generated GDS directory
+  - $ECODIR (eco/): ECO (design changes in p&r) related files

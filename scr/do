@@ -1,0 +1,559 @@
+#!/bin/csh -f
+
+####################################################################################
+## Copyright (c) 2016, University of British Columbia (UBC)  All rights reserved. ##
+##                                                                                ##
+## Redistribution  and  use  in  source   and  binary  forms,   with  or  without ##
+## modification,  are permitted  provided that  the following conditions are met: ##
+##   * Redistributions   of  source   code  must  retain   the   above  copyright ##
+##     notice,  this   list   of   conditions   and   the  following  disclaimer. ##
+##   * Redistributions  in  binary  form  must  reproduce  the  above   copyright ##
+##     notice, this  list  of  conditions  and the  following  disclaimer in  the ##
+##     documentation and/or  other  materials  provided  with  the  distribution. ##
+##   * Neither the name of the University of British Columbia (UBC) nor the names ##
+##     of   its   contributors  may  be  used  to  endorse  or   promote products ##
+##     derived from  this  software without  specific  prior  written permission. ##
+##                                                                                ##
+## THIS  SOFTWARE IS  PROVIDED  BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" ##
+## AND  ANY EXPRESS  OR IMPLIED WARRANTIES,  INCLUDING,  BUT NOT LIMITED TO,  THE ##
+## IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE ##
+## DISCLAIMED.  IN NO  EVENT SHALL University of British Columbia (UBC) BE LIABLE ##
+## FOR ANY DIRECT,  INDIRECT,  INCIDENTAL,  SPECIAL,  EXEMPLARY, OR CONSEQUENTIAL ##
+## DAMAGES  (INCLUDING,  BUT NOT LIMITED TO,  PROCUREMENT OF  SUBSTITUTE GOODS OR ##
+## SERVICES;  LOSS OF USE,  DATA,  OR PROFITS;  OR BUSINESS INTERRUPTION) HOWEVER ##
+## CAUSED AND ON ANY THEORY OF LIABILITY,  WHETHER IN CONTRACT, STRICT LIABILITY, ##
+## OR TORT  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE ##
+## OF  THIS SOFTWARE,  EVEN  IF  ADVISED  OF  THE  POSSIBILITY  OF  SUCH  DAMAGE. ##
+####################################################################################
+
+####################################################################################
+##                 RTL 2 GDS ASIC Synthesis Design Flow Manager                   ##
+##             Author: Ameer Abdelhadi (ameer.abdelhadi@gmail.com)                ##
+## Cell-based interleaved FIFO :: The University of British Columbia :: Nov. 2016 ##
+####################################################################################
+
+####################################################################################
+## USAGE:                                                                         ##
+## ./scr/do <flow stages list> <Vertical stages# list> <Horizontal stages# list> \##
+##          <data width list> <synchronizer depth list> <operation frequency list>##
+##                                                                                ##
+## PARAMETERS:                                                                    ##
+## - Lists:Comma delimited;no spaces;optional surrounding brackets (),[],{},or <> ##
+## - Design flow stages list is an ordered subset of: 'cln', 'syn', 'pnr', 'sta', ##
+##   'sim','pwr', 'dve', or 'sum'. Instead you can use 'all' for the default flow ##
+##   or 'cln all' to clean the whole work directory while keeping rtl and scripts ##
+##   'cln'    : Clean specific run from work directory                            ##
+##   'cln all': Clean all work directory, keep rtl and scripts                    ##
+##   'syn'    : Synopsys Design Compiler logic synthesis                          ##
+##   'pnr'    : Synopsys IC Compiler place and route                              ##
+##   'sta'    : Synopsys PrimeTime post-LO STA and SDF extraction                 ##
+##   'sim'    : Cadence ncverilog gate-level simulation                           ##
+##   'pwr'    : Synopsys Prime Time power estimates using                         ##
+##   'dve'    : Synopsys DVE to show waveform                                     ##
+##   'sum'    : summarize design results (./res.rep)                              ##
+##   'all'    : syn,pnr,sta,sim,pwr,sum                                           ##
+## - Operation frequency is a positive integer measured in MHz                    ##
+## - Vertical/horizontal stages number is an integer larger than 2                ##
+## - Data width is a positive integer                                             ##
+## - Brute-force synchronizer depth is an integer larger than 1                   ##
+## - To redirect the script log to a file, use a pipe with 'tee' command. e.g.:   ##
+##   scr/do all 4,6 2,4 8,16,32 2,3 500,600,700 | tee do.log                      ##
+##   (the log file name should be 'do.log' since other names will be deleted)     ##
+##                                                                                ##
+## EXAMPLES:                                                                      ##
+##   ./scr/do cln all                                                             ##
+##   Cleans all work directory but keeps rtl and scripts                          ##
+##   ./scr/do syn 2 4 8 3 1400                                                    ##
+##   Performs logic synthesis for a FIFO with 2 vertical stages, 4 horizontal     ##
+##   stages, 8-bits data width, 3 FF's synchronizer operating on 1400MHz          ##
+##   ./scr/do syn,pnr 6 4 16,32 3,4 1400,1600                                     ##
+##   Performs logic synthesis & p&r for FIFOs with 6 vertical stages, 4 horizontal##
+##   stages, 16 and 32 bits data width, 3 and 4 FF's synchronizer depth, operating##
+##   on 1400MHz and 1600MHz; total of 8 configurations                            ##
+##  ./scr/do all 2,4 4,6 8,16,32 2,3,4 1000,1400,1600                             ##
+##   Performs logic synthesis, p&r, sta, simulation, power analysis, and summarize##
+##   results for FIFOs with 2 and 4 vertical stages, 4 and 6 horizontal stages, 8,##
+##   16, and 32 bits data width, 2, 3, and 4 FF's synchronizer depth, operating on##
+##   1000, 1400, and 1600 MHz; total of 108 configurations                        ##
+####################################################################################
+
+# don't run from home directory, otherwise files will be deleted
+# create a special directory for your design
+if ($HOME == $PWD) then
+  echo "* 'do' shouldn't be run from your home directory! Exiting..."
+  goto scriptEnd
+endif
+
+# setup environment variables and cad tools 
+# change if necessary
+source env.csh
+
+# save run arguments to $REPDIR/do.history
+if (! -d $REPDIR) mkdir $REPDIR
+echo "scr/do $argv"  >> $REPDIR/do.history
+
+# generate summary
+set genSum   = 0
+
+# one argument; cln or sum
+if (${#argv} == 1) then 
+  if (${argv[1]} == "cln") then
+    echo "=== cleaning work directory, keeping results ..."
+    # remove all temporal files and directories in work directory (not exact 3 chars length)
+    foreach fileName (*)
+      if ((`echo $fileName|wc -c` != 4) && ("$fileName" != README) && ("$fileName" != env.csh) && ("$fileName" != res.rep) && ("$fileName" != res.csv) && ("$fileName" != do.log)  && ("$fileName" != alib-52)) \rm -rf $fileName
+    end
+    # remove all backup and hidden files and generated files in $RTLDIR 
+    foreach fileName ($RUNDIR/.[^\.]* $RUNDIR/*/.[^\.]* $RUNDIR/*~ $RUNDIR/*/*~ $RTLDIR/config.h)
+      \rm -rf $fileName
+    end
+    goto scriptEnd
+  else
+    if (${argv[1]} == "sum") then
+      set genSum = 1;
+      goto loopEnd
+    else
+      if (${argv[1]} == "matlab") then
+        set runMatlab = 1;
+        goto loopEnd
+      else
+        echo Error: commandline arguments error
+        goto errorMessage
+      endif
+    endif
+  endif
+endif
+
+# two arguments: cln all
+if (${#argv} == 2) then
+  if ( (${argv[1]} == "cln") & (${argv[2]} == "all") ) then
+    echo "=== cleaning all work directory, keeping rtl and scripts ..."
+    # remove all but $RTLDIR, $SCRDIR, README, and env.csh
+    foreach fileName (*)
+      if (("$RUNDIR/$fileName" != $RTLDIR) && ("$RUNDIR/$fileName" != $DOCDIR) && ("$RUNDIR/$fileName" != $SCRDIR) && ("$fileName" != README) && ("$fileName" != env.csh)  && ("$fileName" != alib-52)) \rm -rf $fileName
+    end
+    # remove all backup and hidden files and generated files in $RTLDIR 
+    foreach fileName ($RUNDIR/.[^\.]* $RUNDIR/*/.[^\.]* $RUNDIR/*~ $RUNDIR/*/*~ $RTLDIR/config.h)
+      \rm -rf $fileName
+    end
+  goto scriptEnd
+  else
+    echo Error: commandline arguments error
+    goto errorMessage
+  endif
+endif
+
+# if not 1,2 or 9 argument, then error
+if (${#argv} != 6) then
+    echo Error: commandline arguments error
+    goto errorMessage
+endif
+
+# convert each argument list into a c-shell list (romove commas and etc.)
+set DESFLWLST = (`echo ${argv[1]} | tr ",()[]{}<>" " "`)
+set VERSTGLST = (`echo ${argv[2]} | tr ",()[]{}<>" " "`)
+set HORSTGLST = (`echo ${argv[3]} | tr ",()[]{}<>" " "`)
+set DATAWDLST = (`echo ${argv[4]} | tr ",()[]{}<>" " "`)
+set SYNCDPLST = (`echo ${argv[5]} | tr ",()[]{}<>" " "`)
+set OPRFRQLST = (`echo ${argv[6]} | tr ",()[]{}<>" " "`)
+
+# default flow, invoked by 'do all'
+# change default flow if required
+set DESFLWDEF  = "syn pnr sta sim pwr"
+set DESFLWLST_ = "$DESFLWLST"
+set DESFLWLST  = ""
+
+# substitue default flow stages instead of 'all', and enable summarizing
+foreach DESFLW_ ($DESFLWLST_)
+  if ($DESFLW_ == "all") then
+    set DESFLWLST = "$DESFLWLST $DESFLWDEF"
+    set genSum = 1;
+  else
+    if ($DESFLW_ == "sum") then
+      set genSum = 1;
+    else
+      set DESFLWLST = "$DESFLWLST $DESFLW_"
+    endif
+  endif
+end
+
+# check design flow name correctness
+foreach CURDESFLW ($DESFLWLST)
+  if ( ($CURDESFLW != cln) && ($CURDESFLW != syn) && ($CURDESFLW != pnr) && ($CURDESFLW != sta) && \
+       ($CURDESFLW != sim) && ($CURDESFLW != pwr) && ($CURDESFLW != dve)) then
+    echo Error: Invalid command $CURDESFLW; A design flow operation should be cln,syn,pnr,sta,sim,pwr, or dve
+    goto errorMessage
+  endif
+end
+
+# check stages number correctness (is a number)
+foreach CURVERSTG ($VERSTGLST)
+  set VERSTGIsNumber=`echo $CURVERSTG | egrep -c '^[0-9]+$'`
+  if ($VERSTGIsNumber != 1) then
+    echo Error: Invalid number of vertical stages $CURVERSTG; should be a possitive integer
+    goto errorMessage
+  endif
+end
+
+# check stages number correctness (is a number)
+foreach CURHORSTG ($HORSTGLST)
+  set HORSTGIsNumber=`echo $CURHORSTG | egrep -c '^[0-9]+$'`
+  if ($HORSTGIsNumber != 1) then
+    echo Error: Invalid number of horizontal stages $CURHORSTG; should be a possitive integer
+    goto errorMessage
+  endif
+end
+
+# check data bus width correctness (is a number)
+foreach CURDATAWD ($DATAWDLST)
+  set DATAWDIsNumber=`echo $CURDATAWD | egrep -c '^[0-9]+$'`
+  if ($DATAWDIsNumber != 1) then
+    echo Error: Invalid data width $CURDATAWD; hould be a possitive integer
+    goto errorMessage
+  endif
+end
+
+# check brute-force synchronizer depth correctness (is a positive integer)
+foreach CURSYNCDP ($SYNCDPLST)
+  set DATAWDIsNumber=`echo $CURSYNCDP | egrep -c '^[0-9]+$'`
+  if ($DATAWDIsNumber != 1) then
+    echo Error: Invalid brute-force synchronizer depth $CURSYNCDP; should be a possitive integer
+    goto errorMessage
+  endif
+end
+
+# check design frequency correctness (is a number)
+foreach CUROPRFRQ ($OPRFRQLST)
+  set OPRFRQIsNumber=`echo $CUROPRFRQ | egrep -c '^[0-9]+$'`
+  if ($OPRFRQIsNumber != 1) then
+    echo Error: Invalid frequency $CUROPRFRQ; should be a possitive integer
+    goto errorMessage
+  endif
+end
+
+# total different fifo designs
+@ FlowOprNum = ((${#VERSTGLST})*(${#HORSTGLST})*(${#DATAWDLST})*(${#SYNCDPLST})*(${#OPRFRQLST}))
+@ FlowOprCnt = 0
+
+echo
+echo "= Run in batch with the following parameters:"
+echo "= Design flow  stages : $DESFLWLST"
+echo "= Vertical stages   # : $VERSTGLST"
+echo "= Horizontal stages # : $VERSTGLST"
+echo "= FIFO data bus width : $DATAWDLST"
+echo "= synchronizer depth  : $SYNCDPLST"
+echo "= Operation frequency : $OPRFRQLST"
+echo "= Total synthesis runs: $FlowOprNum"
+
+# operate on all different fifo designs
+
+foreach CURVERSTG ($VERSTGLST)
+  setenv VERSTG $CURVERSTG
+
+  foreach CURHORSTG ($HORSTGLST)
+    setenv HORSTG $CURHORSTG
+
+    foreach CURDATAWD ($DATAWDLST)
+      setenv DATAWD $CURDATAWD
+
+        foreach CURSYNCDP ($SYNCDPLST)
+          setenv SYNCDP $CURSYNCDP
+
+          foreach CUROPRFRQ ($OPRFRQLST)
+            setenv OPRFRQ $CUROPRFRQ
+
+                @ FlowOprCnt++
+                set curRunStartTime      = `date +%T`
+                set curRunStartTimeStamp = `date +%s`
+                echo
+                echo "== Current FIFO ($FlowOprCnt/$FlowOprNum) @$curRunStartTime : ${VERSTG} X ${HORSTG} stages, ${DATAWD} bits data width, ${SYNCDP}-FF's synchronizer, @${OPRFRQ}MHz"
+                foreach CURDESFLW ($DESFLWLST)
+                  setenv DESFLW $CURDESFLW
+                  setenv RUNNAM "${VERSTG}X${HORSTG}-${DATAWD}b-${SYNCDP}FF-${OPRFRQ}MHz"
+                  # generate $RTLDIR/config.h
+                  printf '// FIFO Design Configuration File\n'                                             >! $RTLDIR/config.h
+                  printf '// Generated by flow manager before logic synthesis\n'                           >> $RTLDIR/config.h
+                  printf "// Will be deleted if '$SCRDIR/do cln' is applied\n\n"                           >> $RTLDIR/config.h
+                  printf '`define VERSTG %s\t\t\t\t// Vertical FIFO stages#\n'               $VERSTG       >> $RTLDIR/config.h
+                  printf '`define HORSTG %s\t\t\t\t// Horizontal FIFO stages#\n'             $HORSTG       >> $RTLDIR/config.h
+                  printf '`define DATAWD %s\t\t\t\t// FIFO data width\n'                     $DATAWD       >> $RTLDIR/config.h
+                  printf '`define SYNCDP %s\t\t\t\t// FIFO brute-force synchronizer depth\n' $SYNCDP       >> $RTLDIR/config.h
+                  printf '`define OPRFRQ %s\t\t\t\t// Operation frequency in MHz\n'          $OPRFRQ       >> $RTLDIR/config.h
+                  printf '`define RUNNAM "%s"\t// Run name identifier\n'                     $RUNNAM       >> $RTLDIR/config.h
+                  printf '\n// Simulation related parameters\n'                                            >> $RTLDIR/config.h
+                  printf '`define SIMPUTPERSCL %s\t\t// Simulation put period scale\n'       $SIMPUTPERSCL >> $RTLDIR/config.h
+                  printf '`define SIMGETPERSCL %s\t\t// Simulation get period scale\n'       $SIMGETPERSCL >> $RTLDIR/config.h
+                  printf '`define SIMPUTDTYCYC %s\t// Simulation put duty cycle\n'           $SIMPUTDTYCYC >> $RTLDIR/config.h
+                  printf '`define SIMGETDTYCYC %s\t// Simulation get duty cycle\n'           $SIMGETDTYCYC >> $RTLDIR/config.h
+                  printf '`define SIMDATALN    %s\t// Simulation data length\n'              $SIMDATALN    >> $RTLDIR/config.h
+                  # select current design flow stage
+                  switch ($CURDESFLW)
+                    ####################################################################################################
+                    case cln:
+                      echo "=== cleaning specific run from work directory ..."
+                      # remove all temporal files and directories in work directory (not exact 3 chars length)
+                      foreach fileName (*)
+                        if ((`echo $fileName|wc -c` != 4) && ("$fileName" != README)  && ("$fileName" != env.csh) && ("$fileName" != res.rep) && ("$fileName" != res.csv) && ("$fileName" != do.log) && ("$fileName" != alib-52)) \rm -rf $fileName
+                      end
+                      # remove files for this specific run
+                      \rm -rf *${RUNNAM}* */*${RUNNAM}*
+                      # remove all backup and hidden files and generated files in $RTLDIR 
+                      foreach fileName ($RUNDIR/.[^\.]* $RUNDIR/*/.[^\.]* $RUNDIR/*~ $RUNDIR/*/*~ $RTLDIR/config.h)
+                        \rm -rf $fileName
+                      end
+                      breaksw
+                    ####################################################################################################
+                    case syn:
+                      echo "=== Logic synthesis using Synopsys Design Compiler; configured with $SCRDIR/syn.dctcl ..."
+                      # make output directories, if not exicting
+                      if (! -d $REPDIR) mkdir $REPDIR
+                      if (! -d $LOGDIR) mkdir $LOGDIR
+                      if (! -d $SIMDIR) mkdir $SIMDIR
+                      if (! -d $STADIR) mkdir $STADIR
+                      if (! -d $RCEDIR) mkdir $RCEDIR
+                      if (! -d $CTSDIR) mkdir $CTSDIR
+                      if (! -d $ECODIR) mkdir $ECODIR
+                      if (! -d $ENCDIR) mkdir $ENCDIR
+                      if (! -d $GDSDIR) mkdir $GDSDIR
+                      if (! -d $NETDIR) mkdir $NETDIR
+                      if (! -d $PWRDIR) mkdir $PWRDIR
+                      # run dc_shell-t; configured with $SCRDIR/syn.dctcl
+                      if ($useXterm) then
+                        xterm -e "source env.csh; dc_shell-xg-t -topo -f $SCRDIR/syn.dctcl | tee $LOGDIR/${RUNNAM}.syn.log"
+                      else
+                        dc_shell-xg-t -f $SCRDIR/syn.dctcl | tee $LOGDIR/${RUNNAM}.syn.log
+                      endif
+                      breaksw
+                    ####################################################################################################
+                    case pnr:
+                      echo "=== Place and route gates netlist using Cadence SoC Encounter; configured with $SCRDIR/pnr.entcl ..."
+
+                      icc_shell -f $SCRDIR/pnr.ictcl | tee $LOGDIR/${RUNNAM}.pnr.log
+
+                      # fix SDC
+                      #-- perl -i.bak -ne 's/\[(\d+)\]\./_$1__/s; print' $STADIR/${RUNNAM}.sdc
+                      #perl -i.bak -ne 'if (/\//) {s/\[(\d+)\]/_$1_/g;s/\./_/g;s/\//_/g}; print' $STADIR/${RUNNAM}.sdc
+                      # inovke encounter for P & R; configured with $SCRDIR/pnr.entcl
+                      #--if ($useXterm) then
+                      #--  xterm -e "source env.csh; encounter -nolog -nowin -replay $SCRDIR/pnr.entcl | tee $LOGDIR/${RUNNAM}.pnr.log"
+                      #--else
+                      #--  encounter -nolog -nowin -replay $SCRDIR/pnr.entcl | tee $LOGDIR/${RUNNAM}.pnr.log
+                      #--endif
+                      # generate post LO cell statistics
+                      $SCRDIR/stt.pl $NETDIR/${RUNNAM}.pnr.vh > $REPDIR/${RUNNAM}.cellStatistics.pnr.rep
+                      # generatge netlist with synchronizers only
+                      grep "_sync_reg_" $NETDIR/${RUNNAM}.pnr.vh | awk '{sub(/$/,");");print}' >! ${RUNNAM}.tmp
+                      # generate post LO synchronizer cell statistics
+                      $SCRDIR/stt.pl ${RUNNAM}.tmp > $REPDIR/${RUNNAM}.syncStatistics.pnr.rep
+                      grep "_sync_reg_" $NETDIR/${RUNNAM}.pnr.vh | awk '{sub(/$/,");");print}' >! ${RUNNAM}.tmp
+                      # generatge netlist with storage latches only
+                      grep "data_storage_reg_" $NETDIR/${RUNNAM}.pnr.vh | awk '{sub(/$/,");");print}' >! ${RUNNAM}.tmp
+                      # generate post LO synchronizer cells statistics
+                      $SCRDIR/stt.pl ${RUNNAM}.tmp > $REPDIR/${RUNNAM}.storageStatistics.pnr.rep
+                      # generatge netlist with retiming latches only
+                      grep "_l_reg" $NETDIR/${RUNNAM}.pnr.vh | awk '{sub(/$/,");");print}' >! ${RUNNAM}.tmp
+                      # generate post LO retiming latches cell statistics
+                      $SCRDIR/stt.pl ${RUNNAM}.tmp > $REPDIR/${RUNNAM}.retimingStatistics.pnr.rep
+                      # generatge netlist with counter flops only
+                      grep "th.*_reg_" $NETDIR/${RUNNAM}.pnr.vh | awk '{sub(/$/,");");print}' >! ${RUNNAM}.tmp
+                      # generate post LO counter flops cell statistics
+                      $SCRDIR/stt.pl ${RUNNAM}.tmp > $REPDIR/${RUNNAM}.counterStatistics.pnr.rep
+
+                      \rm -rf ${RUNNAM}.tmp
+                      breaksw
+                    ####################################################################################################
+                    case sta:
+                      echo "=== Post LO static timing analysis and SDF extraction using Synopsys PrimeTime ..."
+                      # invoke pt_sell for timing checks; configured with $SCRDIR/sta.pttcl
+                      if ($useXterm) then
+                        xterm -e "source env.csh; pt_shell -f $SCRDIR/sta.pttcl | tee $LOGDIR/${RUNNAM}.sta.log"
+                      else
+                        pt_shell -f $SCRDIR/sta.pttcl | tee $LOGDIR/${RUNNAM}.sta.log
+                      endif
+                      breaksw
+                    ####################################################################################################
+                    case sim:
+                      echo "=== Run gate-level simulation using Cadence ncverilog with $RTLDIR/fifo_tb.v as testbench ..."
+                      # add timescale
+                      (echo '`timescale 1ps/1ps'; cat $NETDIR/${RUNNAM}.pnr.vh) >! $NETDIR/${RUNNAM}.sim.vh
+                      # remove Escaped Identifiers
+                      #perl -i.bak -ne 's/\\(\S+)\[(\d+)\]\s+/$1_$2_/s; print' $NETDIR/${RUNNAM}.sim.vh
+                      # fix some SDF issues
+                      #perl -i.bak -ne 'if (!(/\(IOPATH \((pos|neg)edge [ABS]\d?\) ZN?/)) {print}' $STADIR/${RUNNAM}.sdf
+                      # run SDF annotated gate-level sims
+                      # Test mode (MOD) = RAND EMPT HALF FULL
+                      # FST: Fast   test: enable get/put requests once possible.
+                      # RND: Random test: randomly enables get/put requests.
+                      # EMP: Empty  test: keep FIFO almost empty
+                      # MID: Middle test: keep FIFO almost at the middle
+                      # FLL: Full   test: keep FIFO almost full
+                      if ($useXterm) then
+                        set QU = '"'
+                        xterm -e "source env.csh; ncverilog -timescale 1ps/1ps -sdf_precision 1ps +access+rwc +define+MOD=\${QU}FST\${QU} -v $LIBVRL/$LIBNAM.v $NETDIR/${RUNNAM}.sim.vh $RTLDIR/fifo_tb.v | tee $LOGDIR/${RUNNAM}.fst.sim.log"
+                        xterm -e "source env.csh; ncverilog -timescale 1ps/1ps -sdf_precision 1ps +access+rwc +define+MOD=\${QU}RND\${QU} -v $LIBVRL/$LIBNAM.v $NETDIR/${RUNNAM}.sim.vh $RTLDIR/fifo_tb.v | tee $LOGDIR/${RUNNAM}.rnd.sim.log"
+                        xterm -e "source env.csh; ncverilog -timescale 1ps/1ps -sdf_precision 1ps +access+rwc +define+MOD=\${QU}EMP\${QU} -v $LIBVRL/$LIBNAM.v $NETDIR/${RUNNAM}.sim.vh $RTLDIR/fifo_tb.v | tee $LOGDIR/${RUNNAM}.emp.sim.log"
+                        xterm -e "source env.csh; ncverilog -timescale 1ps/1ps -sdf_precision 1ps +access+rwc +define+MOD=\${QU}MID\${QU} -v $LIBVRL/$LIBNAM.v $NETDIR/${RUNNAM}.sim.vh $RTLDIR/fifo_tb.v | tee $LOGDIR/${RUNNAM}.mid.sim.log"
+                        xterm -e "source env.csh; ncverilog -timescale 1ps/1ps -sdf_precision 1ps +access+rwc +define+MOD=\${QU}FLL\${QU} -v $LIBVRL/$LIBNAM.v $NETDIR/${RUNNAM}.sim.vh $RTLDIR/fifo_tb.v | tee $LOGDIR/${RUNNAM}.fll.sim.log"
+                      else
+                        set PUTSKWLST = (0);
+                        #set PUTSKWLST = (0 1 7 2 6 3 5 4)
+                        set GETSKWLST = (0);
+                        #set GETSKWLST = (0 1 7 2 6 3 5 4)
+                        foreach CURPUTSKW ($PUTSKWLST)
+                          foreach CURGETSKW ($GETSKWLST)
+                            set pass_cur = ""
+                            set pass_all = ""
+                            foreach CURTST (FST RND EMP MID FLL)
+                              set curtst = `echo ${CURTST} | tr '[:upper:]' '[:lower:]'`
+                              # run ncverilog
+                              ncverilog -timescale 1ps/1ps -sdf_precision 1ps +access+rwc +define+MOD=\"${CURTST}\"+PUTSKW=\"${CURPUTSKW}\"+GETSKW=\"${CURGETSKW}\" -v $LIBVRL/$LIBNAM.v $NETDIR/${RUNNAM}.sim.vh $RTLDIR/fifo_tb.v | tee $LOGDIR/${RUNNAM}.${curtst}.sim.log
+                              # run vcs
+                              #vcs -full64 -notice +lint=all,noVCDE,noTFIPC,noIWU,noOUDPE +v2k -timescale=1ps/1ps +define+MOD=\"${CURTST}\"+PUTSKW=\"${CURPUTSKW}\"+GETSKW=\"${CURGETSKW}\" -v $LIBVRL/$LIBNAM.v $NETDIR/${RUNNAM}.sim.vh $RTLDIR/fifo_tb.v | tee $LOGDIR/${RUNNAM}.${curtst}.sim.log
+                              #./simv +verbose=1 | tee -a $LOGDIR/${RUNNAM}.${curtst}.sim.log
+                              # check if simulation passed
+                              #set pass_cur = `grep "data chunks passed FIFO" $LOGDIR/${RUNNAM}.${curtst}.sim.log | cut -d'(' -f2 | cut -d'%' -f1`
+                              #set pass_all = ${pass_all}${pass_cur}
+                              #if (${pass_cur} != "100") break
+                            end
+                            #if (${pass_all} == "100100100100100") break
+                          end
+                          #if (${pass_all} == "100100100100100") break
+                        end
+                      endif
+                      breaksw
+                    ####################################################################################################
+                    case pwr:
+                      echo "=== Invoke power estimates using Synopsys Prime Time; Configured with $SCRDIR/pwr.pptcl ..."
+                      # invoke pt_shell with $SCRDIR/pwr.pptcl to measure power
+                      if ($useXterm) then
+                        xterm -e "source env.csh; pt_shell -f $SCRDIR/pwr.pptcl | tee $LOGDIR/${RUNNAM}.pwr.log"
+                      else
+                        pt_shell -f $SCRDIR/pwr.pptcl | tee $LOGDIR/${RUNNAM}.pwr.log
+                      endif
+                      # foreach test, archive then remove vcd files
+                      foreach CURTST (FST RND EMP MID FLL)
+                        mv  $SIMDIR/${RUNNAM}.${CURTST}.vcd ./
+                        tar -czf ${RUNNAM}.${CURTST}.vcd.tar.gz ${RUNNAM}.${CURTST}.vcd
+                        mv ${RUNNAM}.${CURTST}.vcd.tar.gz $SIMDIR
+                        \rm -rf ${RUNNAM}.${CURTST}.vcd
+                      end
+                      breaksw
+                    ####################################################################################################
+                    case dve:
+                      echo "=== Run Synopsys DVE to show waveform; Configured with $SCRDIR/dve.tcl ..."
+                      tar -xzf $SIMDIR/${RUNNAM}.RND.vcd.tar.gz -C $SIMDIR
+                      # run dve to show waveform
+                      dve -script $SCRDIR/dve.tcl&
+                      breaksw
+                    ####################################################################################################
+                    default:
+                      echo "Error: Invalid command $CURDESFLW; A design flow operation should be cln,syn,pnr,sta,sim,pwr, or dve"
+                      goto errorMessage
+                    ####################################################################################################
+                  endsw
+                end
+                # calculate runtime and generate a report / per run
+                set curRunFinishTime      = `date +%T`
+                set curRunFinishTimeStamp = `date +%s`
+                @   curRunTimeDiff        = $curRunFinishTimeStamp - $curRunStartTimeStamp
+                @   curRuntimeHr          =   $curRunTimeDiff / ( 60 * 60  )
+                @   curRuntimeMn          = ( $curRunTimeDiff % ( 60 * 60  ) ) / 60 
+                @   curRuntimeSc          =   $curRunTimeDiff %   60
+                set curRuntimeMin         = `echo "scale=2;$curRunTimeDiff/60"|bc`
+                echo "== Current run funished @$curRunFinishTime, runtime duration: $curRuntimeHr hours and $curRuntimeMn minutes and $curRuntimeSc seconds"
+                echo "${curRuntimeHr}:${curRuntimeMn}:${curRuntimeSc}=${curRuntimeMin}min" >> $REPDIR/${RUNNAM}.runtime.rep
+                # clean unrequired files from work area / per run
+                if ($clnVCD   )  \rm -rf $SIMDIR/${RUNNAM}.*.vcd*
+                if ($clnNET   )  \rm -rf $NETDIR/${RUNNAM}.*.vh
+                if ($clnRCE   )  \rm -rf $RCEDIR/${RUNNAM}.*f
+                if ($clnSTASDF)  \rm -rf $STADIR/${RUNNAM}.*sd*
+                if ($clnSTAREP)  \rm -rf $STADIR/${RUNNAM}.*.rep
+                if ($clnENC   )  \rm -rf $ENCDIR/${RUNNAM}.*
+                if ($clnCTS   )  \rm -rf $CTSDIR/${RUNNAM}.*
+                if ($clnRUNDIR)  \rm -rf $RUNDIR/${RUNNAM}*
+                # move config.h to reports
+                mv $RTLDIR/config.h $REPDIR/${RUNNAM}.config.h
+
+        end
+      end
+    end
+  end
+end
+
+# clean unrequired files / after run
+if ($clnRUNDIR) then
+  # remove all temporal files and directories in work directory (not exact 3 chars length)
+  foreach fileName (*)
+    if ((`echo $fileName|wc -c` != 4) && ("$fileName" != README)  && ("$fileName" != env.csh) && ("$fileName" != res.rep) && ("$fileName" != res.csv) && ("$fileName" != do.log) && ("$fileName" != alib-52)) \rm -rf $fileName
+  end
+  # remove all backup and hidden files
+  #foreach fileName ($RUNDIR/.[^\.]* $RUNDIR/*/.[^\.]* $RUNDIR/*~ $RUNDIR/*/*~)
+  #  \rm -rf $fileName
+  #end
+endif
+
+loopEnd:
+
+# generate design summary
+if ($genSum) then
+  echo "=== summarizing results, see res.rep ..."
+  $SCRDIR/res.pl > res.rep
+  echo "=== generating csv results, see res.csv ..."
+  echo 'Sender,Receiver,Stages,DataWidth,Synchronizers,PipeSpaceav,PipeDatav,FreqReq,FreqSynClkd,FreqSynAsyn,FreqSimPut,FreqSimGet,SimFAST,SimRAND,SimEMPT,SimHALF,SimFULL,PhaseShiftPut,PhaseShiftGet,CellCountComb,CellCountSeq,CellCountSync,CellCountTot,CellAreaComb,CellAreaSeq,CellAreaSync,CellAreaTot,DeviceCountComb,DeviceCountSeq,DeviceCountSync,DeviceCountTot,PowerNetSwitching,PowerCellDynamic,PowerCellLeakage,PowerTotal,LatencyForward,LatencyBackward,Performance,Bitrate,WireLengthM1,WireLengthM2,WireLengthM3,WireLengthM4,WireLengthM5,WireLengthTotal,RunTime' >! res.csv
+  echo 'Protocol: Sender,Protocol: Receiver,Stages Number,Data Width,Synchronizer Depth,Pipelined spaceav,Pipelined datav,Freq(MHz): Required,Freq(MHz): Synthesis Clkd,Freq(MHz): Synthesis Async,Freq(MHz): Sim put,Freq(MHz): Sim get,GLS Sim: FAST Test,GLS Sim: RAND Test,GLS Sim: EMPTY Test,GLS Sim: HALF Test,GLS Sim: FULL Test,User Phase Shift: Put,User Phase Shift: Get,Cell Count: Combinatorial,Cell Count: Sequential,Cell Count: Synchronizers,Cell Count: Total,Cell Area: Combinatorial,Cell Area: Sequential,Cell Area: Synchronizers,Cell Area: Total,Device Count: Combinatorial,Device Count: Sequential,Device Count: Synchronizers,Device Count: Total,Power(w): Net Switching,Power(w): Cell Dynamic,Power(w): Cell Leakage,Power(w): Total,Latency(ps): Forward,Latency(ps): Backward,Performance(MHz),Bitrate(Gbit/s),Wire Length: Metal1,Wire Length: Metal2,Wire Length: Metal3,Wire Length: Metal4,Wire Length: Metal5,Wire Length: Total,Run Time' >> res.csv
+  tail -n +6 res.rep| sed -e 's/  */,/g'   >> res.csv
+endif
+
+if ($runMatlab) then
+  echo "=== Running matlab with ./scr/res.m and results from res.csv ..."
+  matlab -desktop -r "run('./scr/res.m')" &
+endif
+
+goto scriptEnd
+
+# error message
+
+errorMessage:
+echo "USAGE:"
+echo "./scr/do <flow stages list> <Vertical stages# list> <Horizontal stages# list> \"
+echo "         <data width list> <synchronizer depth list> <operation frequency list>"
+echo "PARAMETERS:"
+echo "- Lists:Comma delimited;no spaces;optional surrounding brackets (),[],{},or <>"
+echo "- Design flow stages list is an ordered subset of: 'cln', 'syn', 'pnr', 'sta',"
+echo "  'sim','pwr', 'dve', or 'sum'. Instead you can use 'all' for the default flow"
+echo "  or 'cln all' to clean the whole work directory while keeping rtl and scripts"
+echo "  'cln'    : Clean specific run from work directory"
+echo "  'cln all': Clean all work directory, keep rtl and scripts"
+echo "  'syn'    : Synopsys Design Compiler logic synthesis"
+echo "  'pnr'    : Synopsys IC Compiler place and route"
+echo "  'sta'    : Synopsys PrimeTime post-LO STA and SDF extraction"
+echo "  'sim'    : Cadence ncverilog gate-level simulation"
+echo "  'pwr'    : Synopsys Prime Time power estimates using"
+echo "  'dve'    : Synopsys DVE to show waveform"
+echo "  'sum'    : summarize design results (./res.rep)"
+echo "  'all'    : syn,pnr,sta,sim,pwr,sum"
+echo "- Operation frequency is a positive integer measured in MHz"
+echo "- Vertical/horizontal stages number is an integer larger than 2"
+echo "- Data width is a positive integer"
+echo "- Brute-force synchronizer depth is an integer larger than 1"
+echo "- To redirect the script log to a file, use a pipe with 'tee' command. e.g.:"
+echo "  scr/do all 4,6 2,4 8,16,32 2,3 500,600,700 | tee do.log"
+echo "  (the log file name should be 'do.log' since other names will be deleted)"
+echo "EXAMPLES:"
+echo "  ./scr/do cln all"
+echo "  Cleans all work directory but keeps rtl and scripts"
+echo "  ./scr/do syn 2 4 8 3 1400"
+echo "  Performs logic synthesis for a FIFO with 2 vertical stages, 4 horizontal"
+echo "  stages, 8-bits data width, 3 FF's synchronizer operating on 1400MHz"
+echo "  ./scr/do syn,pnr 6 4 16,32 3,4 1400,1600"
+echo "  Performs logic synthesis & p&r for FIFOs with 6 vertical stages, 4 horizontal"
+echo "  stages, 16 and 32 bits data width, 3 and 4 FF's synchronizer depth, operating"
+echo "  on 1400MHz and 1600MHz; total of 8 configurations"
+echo " ./scr/do all 2,4 4,6 8,16,32 2,3,4 1000,1400,1600"
+echo "  Performs logic synthesis, p&r, sta, simulation, power analysis, and summarize"
+echo "  results for FIFOs with 2 and 4 vertical stages, 4 and 6 horizontal stages, 8,"
+echo "  16, and 32 bits data width, 2, 3, and 4 FF's synchronizer depth, operating on"
+echo "  1000, 1400, and 1600 MHz; total of 108 configurations"
+
+scriptEnd:
+

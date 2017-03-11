@@ -1,0 +1,465 @@
+####################################################################################
+## Copyright (c) 2016, University of British Columbia (UBC)  All rights reserved. ##
+##                                                                                ##
+## Redistribution  and  use  in  source   and  binary  forms,   with  or  without ##
+## modification,  are permitted  provided that  the following conditions are met: ##
+##   * Redistributions   of  source   code  must  retain   the   above  copyright ##
+##     notice,  this   list   of   conditions   and   the  following  disclaimer. ##
+##   * Redistributions  in  binary  form  must  reproduce  the  above   copyright ##
+##     notice, this  list  of  conditions  and the  following  disclaimer in  the ##
+##     documentation and/or  other  materials  provided  with  the  distribution. ##
+##   * Neither the name of the University of British Columbia (UBC) nor the names ##
+##     of   its   contributors  may  be  used  to  endorse  or   promote products ##
+##     derived from  this  software without  specific  prior  written permission. ##
+##                                                                                ##
+## THIS  SOFTWARE IS  PROVIDED  BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" ##
+## AND  ANY EXPRESS  OR IMPLIED WARRANTIES,  INCLUDING,  BUT NOT LIMITED TO,  THE ##
+## IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE ##
+## DISCLAIMED.  IN NO  EVENT SHALL University of British Columbia (UBC) BE LIABLE ##
+## FOR ANY DIRECT,  INDIRECT,  INCIDENTAL,  SPECIAL,  EXEMPLARY, OR CONSEQUENTIAL ##
+## DAMAGES  (INCLUDING,  BUT NOT LIMITED TO,  PROCUREMENT OF  SUBSTITUTE GOODS OR ##
+## SERVICES;  LOSS OF USE,  DATA,  OR PROFITS;  OR BUSINESS INTERRUPTION) HOWEVER ##
+## CAUSED AND ON ANY THEORY OF LIABILITY,  WHETHER IN CONTRACT, STRICT LIABILITY, ##
+## OR TORT  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE ##
+## OF  THIS SOFTWARE,  EVEN  IF  ADVISED  OF  THE  POSSIBILITY  OF  SUCH  DAMAGE. ##
+####################################################################################
+
+####################################################################################
+##                  Place and route with Cadence SoC Encounter                    ##
+##             Author: Ameer Abdelhadi (ameer.abdelhadi@gmail.com)                ##
+## Cell-based interleaved FIFO :: The University of British Columbia :: Nov. 2016 ##
+####################################################################################
+
+global env
+
+# define library design kit and synthesis tools variables
+# Change these links to your own design kit location
+#   TSMC65: library base link
+#   LIBNAM: library name
+#   LIBCOR: library corner, wc: worst case, tc: typical case, bc: best case
+#   LIBDBB: library DBB database link
+#   LIBLEF: a link to library LEF files
+#   LIBGDS: a link to library GDS files
+#   LIBVRL: a link to library Verilog files
+#   SYNOPS: a link to Synopsys tools directory
+#   TOPMOS: Verilog top module name
+set TSMC65 $env(TSMC65)
+set LIBNAM $env(LIBNAM)
+set LIBCOR $env(LIBCOR)
+set LIBDBB $env(LIBDBB)
+set LIBLEF $env(LIBLEF)
+set LIBGDS $env(LIBGDS)
+set LIBVRL $env(LIBVRL)
+set SYNOPS $env(SYNOPSYS)
+
+# Design variables
+#   SNDTYP   : Sender   protocol type (asps,clkd)
+#   RCVTYP   : receiver protocol type (asps,clkd)
+#   OPRFRQ   : Bus  clock frequency for place and route
+#   STAGES   : Core clock frequency for place and route
+#   DATAWD   : Bus  clock frequency for timing analysis
+#   RUNNAM   : Current run name, used as prefix to file names
+#   SYNFRQSCL: Core clock frequency for timing analysis
+set SNDTYP        $env(SNDTYP)
+set RCVTYP        $env(RCVTYP)
+set OPRFRQ        $env(OPRFRQ)
+set STAGES        $env(STAGES)
+set DATAWD        $env(DATAWD)
+set RUNNAM        $env(RUNNAM)
+set CLKDSYNFRQSCL $env(CLKDSYNFRQSCL)
+set ASYNSYNFRQSCL $env(ASYNSYNFRQSCL)
+
+# define environemt variables and output library locatiobs
+#   RUNDIR: home directory
+#   SCRDIR: scripts directory
+#   RTLDIR: RTL directory
+#   REPDIR: design reports directory
+#   LOGDIR: run logs directory
+#   SIMDIR: logic simulation related files
+#   STADIR: Static Timing Analysis (STA) related files
+#   RCEDIR: RC extraction related files directory
+#   CTSDIR: Clock Tree Synthesis (CTS) related files
+#   ECODIR: ECO (design changes in p&r) related files
+#   ENCDIR: SoC Encounter related files
+#   GDSDIR: generated GDS directory
+#   NETDIR: netlists directory
+#   PWRDIR: power estimates directory
+set RUNDIR $env(RUNDIR)
+set SCRDIR $env(SCRDIR)
+set RTLDIR $env(RTLDIR)
+set REPDIR $env(REPDIR)
+set LOGDIR $env(LOGDIR)
+set NETDIR $env(NETDIR)
+set ENCDIR $env(ENCDIR)
+set STADIR $env(STADIR)
+set CTSDIR $env(CTSDIR)
+set ECODIR $env(ECODIR)
+set RCEDIR $env(RCEDIR)
+set GDSDIR $env(GDSDIR)
+set SIMDIR $env(SIMDIR)
+set PWRDIR $env(PWRDIR)
+
+# wait delay_sec before proceeding execution
+proc execWait {delay_sec} {
+  fconfigure stdin -blocking 0
+  for {set i 1} {$i<=$delay_sec} {incr i} {
+    after 1000 
+    gets stdin
+    set isBlocked [eval fblocked stdin]
+    if {!$isBlocked} {break}
+    set numbering "[$i]"
+    set backSpace ""
+    set backSpace [eval string repeat "\b" [string length $numbering]]
+    puts -nonewline "$numbering"
+    if {$i < $delay_sec} {puts -nonewline "$backSpace"} else {puts ""}
+  }
+  fconfigure stdin -blocking 1
+  return $isBlocked
+}
+
+# print P&R start time
+set startTime [clock seconds]
+puts "\n@@ Place & route with Cadence SoC Enncounter started on [clock format $startTime]\n\n"
+
+# unlimited messages length
+unsetMessageLimit
+
+# allow multiprocessing (4 CPUs, change to youe specific architicture)
+setMultiCpuUsage -localCpu 4
+
+# encounter displays modules with >100 cells by default. Change to 1 to display everything.
+setPreference MinFPModuleSize 1
+
+# setup design and create floorplan
+loadConfig $SCRDIR/enc.cfg
+#commitConfig
+
+# eco cells
+set_dont_use true [get_lib_cells tcbn65lpwc/G* ]
+# clock cells
+#set_dont_use true [get_lib_cells tcbn65lpwc/CK* ]
+# scan cells
+set_dont_use true [get_lib_cells tcbn65lpwc/SD* ]
+set_dont_use true [get_lib_cells tcbn65lpwc/SE* ]
+# small cells
+set_dont_use true [get_lib_cells tcbn65lpwc/*D0 ]
+#set_dont_use true [get_lib_cells tcbn65lpwc/*D1 ]
+# buffer cells
+set_dont_use true [get_lib_cells tcbn65lpwc/BUF*]
+set_dont_use true [get_lib_cells tcbn65lpwc/DEL*]
+# some complex cells
+set_dont_use true [get_lib_cells tcbn65lpwc/AN* ]
+set_dont_use true [get_lib_cells tcbn65lpwc/AO2*]
+set_dont_use true [get_lib_cells tcbn65lpwc/AO3*]
+set_dont_use true [get_lib_cells tcbn65lpwc/BEN*]
+set_dont_use true [get_lib_cells tcbn65lpwc/BHD*]
+set_dont_use true [get_lib_cells tcbn65lpwc/BML*]
+set_dont_use true [get_lib_cells tcbn65lpwc/CMP*]
+set_dont_use true [get_lib_cells tcbn65lpwc/F*  ]
+set_dont_use true [get_lib_cells tcbn65lpwc/H*  ]
+set_dont_use true [get_lib_cells tcbn65lpwc/OA2*]
+set_dont_use true [get_lib_cells tcbn65lpwc/OA3*]
+set_dont_use true [get_lib_cells tcbn65lpwc/OR* ]
+# xor cells
+set_dont_use true [get_lib_cells tcbn65lpwc/X*  ]
+# mux cells
+set_dont_use true [get_lib_cells tcbn65lpwc/MUX*]
+# other complex cells
+set_dont_use true [get_lib_cells tcbn65lpwc/IAO*]
+set_dont_use true [get_lib_cells tcbn65lpwc/IIN*]
+set_dont_use true [get_lib_cells tcbn65lpwc/IND*]
+set_dont_use true [get_lib_cells tcbn65lpwc/INR*]
+set_dont_use true [get_lib_cells tcbn65lpwc/IOA*]
+set_dont_use true [get_lib_cells tcbn65lpwc/MOA*]
+# other other complex cells
+#set_dont_use true [get_lib_cells tcbn65lpwc/AOI*]
+#set_dont_use true [get_lib_cells tcbn65lpwc/MAOI222D*]
+set_dont_use true [get_lib_cells tcbn65lpwc/MAOI22D*]
+#set_dont_use true [get_lib_cells tcbn65lpwc/OAI*]
+
+reportDontUseCells
+
+
+set_disable_clock_gating_check [get_cells *]
+
+setDesignMode -process 45
+
+# scale RC extraction
+setRCFactor -cap 0.8
+
+###############################################################################
+##                  floorplanning and power grid generation                  ##
+###############################################################################
+
+# create Initial Floorplan
+# by aspect ratio (1.0) and row utilization (0.5)
+floorplan -r 1.0 0.8 20 20 20 20
+# by specifc coe site
+#   floorPlan -s 200 200 0 0 0 0
+
+## create power grid and stripes
+
+# declare vdd/gnd pin's for all std-cells (connect all cells to VDD/GND)
+globalNetConnect vdd -type pgpin -pin {VDD } -inst * -module {} -override
+globalNetConnect gnd -type pgpin -pin {VSS } -inst * -module {} -override
+
+# declare 0/1 vhdl/verilog constants to be on vdd/gnd supplys
+globalNetConnect vdd -type tiehi -module {}
+globalNetConnect gnd -type tielo -module {}
+
+# execute command
+applyGlobalNets
+
+# check all design
+checkdesign -all
+
+# add power ring
+addRing \
+  -width_left 5 -width_bottom 5 -width_top 5 -width_right 5 \
+  -spacing_top 1.5 -spacing_bottom 1.5 -spacing_right 1.5 -spacing_left 1.5 \
+  -center 1 -around core -threshold 0.45 -jog_distance 0.45 \
+  -offset_bottom 0.45 -offset_left 0.45 -offset_right 0.45 -offset_top 0.45 \
+  -layer_right M2 -layer_left M2 -layer_bottom M1 -layer_top M1 \
+  -stacked_via_top_layer M7 -stacked_via_bottom_layer M1 \
+  -nets {gnd vdd } 
+
+# Create std-cell follow pin
+deselectAll
+cutRow
+
+# Use editPowerVia to generate stripes-followpins
+sroute -nets {gnd vdd} -connect floatingStripe
+clearCutRow
+deselectAll
+
+# save floorplan
+saveFPlan $ENCDIR/${RUNNAM}.fp
+
+# check floorplan
+verifyGeometry -report $REPDIR/${RUNNAM}.verifygeometry.floorplan.pnr.rep
+
+# save design
+saveDesign $ENCDIR/${RUNNAM}.floorplan.enc
+# to restore design
+#   source $ENCDIR/${RUNNAM}.floorplan.enc
+
+###############################################################################
+##                         standard cells placement                          ##
+###############################################################################
+
+#amoebaPlace -doCongOpt -highEffort -ignoreScan -ignoreSpare
+
+placeDesign -inPlaceOpt
+placeDesign -inPlaceOpt -incremental
+
+saveDesign $ENCDIR/${RUNNAM}.place.enc
+# to restore design
+#   source $ENCDIR/${RUNNAM}.place.enc
+
+checkPlace > $REPDIR/${RUNNAM}.checkplace.pnr.rep
+
+# perform trial route and get initial timing results
+trialroute
+# to limit routing layers
+#   trialRoute -maxRouteLayer 6
+buildTimingGraph
+setCteReport
+report_timing -nworst  10 -net > $STADIR/${RUNNAM}.timing.place.pnr.rep
+
+# in place opt
+
+#if {($SNDTYP == "clkd") || ($RCVTYP == "clkd")} {
+
+# to redefine clocks uncomment the following
+#clearClockDomains
+#setClockDomains -fromType register -toType register
+
+setOptMode -holdTargetSlack            0.0
+setOptMode -setupTargetSlack           0.0
+setOptMode -usefulSkew                 false
+setOptMode -effort                     high
+setOptMode -considerNonActivePathGroup true
+optDesign -preCTS
+optDesign -preCTS -incr
+
+###############################################################################
+##                        Clock Tree Synthesis (CTS)                         ##
+###############################################################################
+
+# Run Clock Tree Synthesis
+
+
+setCTSMode -routeBottomPreferredLayer M4 -routeLeafBottomPreferredLayer M4 -routeTopPreferredLayer M5 -routeLeafTopPreferredLayer M5
+setCTSMode -optLatency                    true
+#setCTSMode -optAddBuffer                  true
+#setCTSMode -routeClkNet                   true
+#setCTSMode -routeGuide                    false
+setCTSMode -synthLatencyEffort            high
+setCTSMode -verbose                       true
+
+ createClockTreeSpec -output $CTSDIR/${RUNNAM}.enc.cts -bufferList CKND1 CKND2 CKND3 CKND4 CKND6 CKND8 CKND12 CKND16
+#createClockTreeSpec -output $CTSDIR/${RUNNAM}.enc.cts -bufferList INVD1 INVD2 INVD3 INVD4 INVD6 INVD8 INVD12 INVD16
+specifyClockTree -clkfile $CTSDIR/${RUNNAM}.enc.cts
+#ckSynthesis -forceReconvergent  -fix_added_buffers
+#-rguide $CTSDIR/${RUNNAM}.cts.rguide -report $CTSDIR/${RUNNAM}.report.ctsrpt -macromodel $CTSDIR/${RUNNAM}.report.ctsmdl -fix_added_buffers
+foreach_in_collection  cur_clk [all_clocks] {
+  ckSynthesis -clk [get_object_name $cur_clk] -forceReconvergent -dontFixAddedBuffers
+}
+
+saveDesign $ENCDIR/${RUNNAM}.cts.enc
+# to restore design
+#   source $ENCDIR/${RUNNAM}.cts.enc
+
+setAnalysisMode -clockPropagation sdcControl
+buildTimingGraph
+timeDesign -postCTS -outDir $STADIR/${RUNNAM}.timing.cts.pnr.rep
+
+## Route clocks only first
+#setAttribute -net @clock -weight 5 -avoid_detour true -bottom_preferred_routing_layer 4 -preferred_extra_space 1
+selectNet -allDefClock
+setNanoRouteMode -envNumberFailLimit 111
+setNanoRouteMode -quiet -routeWithTimingDriven false
+setNanoRouteMode -quiet -routeSelectedNetOnly true
+setNanoRouteMode -quiet -routeBottomRoutingLayer 1
+setNanoRouteMode -quiet -routeTopRoutingLayer 6
+globalDetailRoute
+# trialRoute -highEffort -guide $CTSDIR/cts.rguide
+
+#unfix clock routes so nano can fix violations
+changeUseClockNetStatus -noFixedNetWires
+
+# Output Results of CTS
+extractRC
+reportClockTree -postRoute -localSkew -report $CTSDIR/${RUNNAM}.skew.post_troute_local.ctsrpt
+reportClockTree -postRoute -report $CTSDIR/${RUNNAM}.report.post_troute.ctsrpt
+
+# Run Post-CTS Timing analysis
+setAnalysisMode -checkType setup -asyncChecks async -skew true -clockPropagation autoDetectClockTree
+buildTimingGraph
+setCteReport
+report_timing -nworst 10 -net > $STADIR/${RUNNAM}.timing.postcts.pnr.rep
+
+# optimize design post CTS
+optDesign -postCTS
+optDesign -postCTS -incr
+
+#}
+
+###############################################################################
+##                                   route                                   ##
+###############################################################################
+
+## Route All Nets
+setNanoRouteMode -quiet -routeSelectedNetOnly false
+setNanoRouteMode -quiet -routeWithTimingDriven true
+setNanoRouteMode -quiet -routeTdrEffort 10
+setNanoRouteMode -quiet -drouteFixAntenna true
+setNanoRouteMode -quiet -routeWithSiDriven true
+setNanoRouteMode -quiet -routeSiLengthLimit 200
+setNanoRouteMode -quiet -routeSiEffort high
+
+globalDetailRoute
+
+saveDesign $ENCDIR/${RUNNAM}.postroute.enc
+# to restore design
+#   source $ENCDIR/${RUNNAM}.postroute.enc
+
+# optimize design post route incremental
+optDesign -postRoute
+optDesign -postRoute -incr
+
+# DRC fixes
+clearDrc
+
+# generate post routing reports
+verifyGeometry -allowDiffCellViols                       -report  $REPDIR/${RUNNAM}.verifygeometry.route.pnr.rep
+verifyConnectivity -type regular -error 1000 -warning 50 -report  $REPDIR/${RUNNAM}.verifyconnectivity.route.pnr.rep
+verifyProcessAntenna                                     -report  $REPDIR/${RUNNAM}.verifyprocessantenna.route.pnr.rep
+report_power -leakage                                    -outfile $REPDIR/${RUNNAM}.reportpower.route.pnr.rep
+
+# fix setup violations post CTS
+setExtractRCMode -engine preRoute -assumeMetFill
+extractRC
+#fixSetupViolation -guide $CTSDIR/${RUNNAM}.cts.rguide
+
+# Fix all remaining violations
+setExtractRCMode -engine postRoute -assumeMetFill
+extractRC
+if {[isDRVClean -maxTran -maxCap -maxFanout] != 1} {
+  optDesign -drv -postRoute
+}
+
+# Add filler cells
+#   addFiller -cell FILL -prefix FILL -fillBoundary
+
+# Run global Routing
+#   globalDetailRoute
+#   wroute
+
+#optDesign -postRoute -drv
+#optDesign -postRoute -signoff
+#optDesign -postRoute -signoff -incr
+
+# Get final timing results
+setExtractRCMode -engine postRoute -effortLevel low -reduce 0.0
+extractRC -outfile $RCEDIR/${RUNNAM}.cap
+buildTimingGraph
+setCteReport
+report_timing -nworst  10 -net > $STADIR/${RUNNAM}.timing.final.pnr.rep
+
+# generate final netlist
+saveNetlist -excludeLeafCell $NETDIR/${RUNNAM}.pnr.vh
+#saveNetlist $NETDIR/${RUNNAM}.pnr.vh
+
+# generate lef file
+lefOut $ENCDIR/${RUNNAM}.lef -stripePin -PGpinLayers 5 6
+
+# generate def file
+defOut -floorplan -routing $ENCDIR/${RUNNAM}.def
+
+# generate GDSII
+#   streamOut $GDSDIR/${RUNNAM}.gds2
+#     -mapFile $LIBGDS/${LIBNAM}.gds
+#     -structureName ${RUNNAM}
+#     -stripes 1
+#     -units 1000
+#     -mode ALL
+
+# generate tlf file
+genTlfModel
+exec mv ${SNDTYP}2${RCVTYP}_fifo.tlf $ENCDIR/${RUNNAM}.tlf
+
+# generate sdf file
+write_sdf -interconn noport -celltiming nochecks -nonegchecks $STADIR/${RUNNAM}.pnr.sdf
+
+# generate dspf and spef RC data
+rcOut -spf  $RCEDIR/${RUNNAM}.dspf
+rcOut -spef $RCEDIR/${RUNNAM}.spef
+
+
+# generate final reports
+verifyGeometry                   -report $REPDIR/${RUNNAM}.verifygeometry.final.pnr.rep 
+verifyConnectivity -type all     -report $REPDIR/${RUNNAM}.verifyconnectivity.all.final.pnr.rep
+verifyConnectivity -type regular -report $REPDIR/${RUNNAM}.verifyconnectivity.regular.final.pnr.rep
+verifyConnectivity -type special -report $REPDIR/${RUNNAM}.verifyConnectivity.special.final.pnr.rep
+verifyMetalDensity               -report $REPDIR/${RUNNAM}.verifymetaldensity.final.pnr.rep
+
+# to show Encounter GUI
+#   win
+
+# print P&R finish time
+set finishTime [clock seconds]
+puts "\n@@ Place & route with Cadence SoC Enncounter finished on [clock format $finishTime]\n"
+
+# calculate and print runtime
+set baseTime [clock scan {00:00:00}]
+set diffTime [expr $baseTime+$finishTime-$startTime]
+puts "@@ Total runtime for Place & route with Cadence SoC Enncounter is [clock format $diffTime -format {%H hours and %M minutes}]\n"
+
+# wait 3 seconds to exit
+puts -nonewline "\r\nExecution finished! Exiting in 3 seconds. Press 'Enter' to stop exiting. "
+set notPressed [execWait 3]
+
+if {$notPressed} {
+  exit
+}

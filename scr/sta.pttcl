@@ -1,0 +1,175 @@
+####################################################################################
+## Copyright (c) 2016, University of British Columbia (UBC)  All rights reserved. ##
+##                                                                                ##
+## Redistribution  and  use  in  source   and  binary  forms,   with  or  without ##
+## modification,  are permitted  provided that  the following conditions are met: ##
+##   * Redistributions   of  source   code  must  retain   the   above  copyright ##
+##     notice,  this   list   of   conditions   and   the  following  disclaimer. ##
+##   * Redistributions  in  binary  form  must  reproduce  the  above   copyright ##
+##     notice, this  list  of  conditions  and the  following  disclaimer in  the ##
+##     documentation and/or  other  materials  provided  with  the  distribution. ##
+##   * Neither the name of the University of British Columbia (UBC) nor the names ##
+##     of   its   contributors  may  be  used  to  endorse  or   promote products ##
+##     derived from  this  software without  specific  prior  written permission. ##
+##                                                                                ##
+## THIS  SOFTWARE IS  PROVIDED  BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" ##
+## AND  ANY EXPRESS  OR IMPLIED WARRANTIES,  INCLUDING,  BUT NOT LIMITED TO,  THE ##
+## IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE ##
+## DISCLAIMED.  IN NO  EVENT SHALL University of British Columbia (UBC) BE LIABLE ##
+## FOR ANY DIRECT,  INDIRECT,  INCIDENTAL,  SPECIAL,  EXEMPLARY, OR CONSEQUENTIAL ##
+## DAMAGES  (INCLUDING,  BUT NOT LIMITED TO,  PROCUREMENT OF  SUBSTITUTE GOODS OR ##
+## SERVICES;  LOSS OF USE,  DATA,  OR PROFITS;  OR BUSINESS INTERRUPTION) HOWEVER ##
+## CAUSED AND ON ANY THEORY OF LIABILITY,  WHETHER IN CONTRACT, STRICT LIABILITY, ##
+## OR TORT  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE ##
+## OF  THIS SOFTWARE,  EVEN  IF  ADVISED  OF  THE  POSSIBILITY  OF  SUCH  DAMAGE. ##
+####################################################################################
+
+####################################################################################
+##               static timing analysis with  Synopsys Prime Time                 ##
+##             Author: Ameer Abdelhadi (ameer.abdelhadi@gmail.com)                ##
+## Cell-based interleaved FIFO :: The University of British Columbia :: Nov. 2016 ##
+####################################################################################
+
+global env
+
+# define library design kit and synthesis tools variables
+# Change these links to your own design kit location
+#   TSMC65: library base link
+#   LIBNAM: library name
+#   LIBCOR: library corner, wc: worst case, tc: typical case, bc: best case
+#   LIBDBB: library DBB database link
+#   LIBLEF: a link to library LEF files
+#   LIBGDS: a link to library GDS files
+#   LIBVRL: a link to library Verilog files
+#   SYNOPS: a link to Synopsys tools directory
+#   TOPMOS: Verilog top module name
+set TSMC65 $env(TSMC65)
+set LIBNAM $env(LIBNAM)
+set LIBCOR $env(LIBCOR)
+set LIBDBB $env(LIBDBB)
+set LIBLEF $env(LIBLEF)
+set LIBGDS $env(LIBGDS)
+set LIBVRL $env(LIBVRL)
+set SYNOPS $env(SYNOPSYS)
+
+# Design variables
+#   VERSTG   : Number of vertical stages
+#   HORSTG   : Number of horizontal stages
+#   OPRFRQ   : Bus  clock frequency for place and route
+#   STAGES   : Core clock frequency for place and route
+#   DATAWD   : Bus  clock frequency for timing analysis
+#   RUNNAM   : Current run name, used as prefix to file names
+#   SYNFRQSCL: Core clock frequency for timing analysis
+set VERSTG        $env(VERSTG)
+set HORSTG        $env(HORSTG)
+set DATAWD        $env(DATAWD)
+set OPRFRQ        $env(OPRFRQ)
+set RUNNAM        $env(RUNNAM)
+set CLKDSYNFRQSCL $env(CLKDSYNFRQSCL)
+set ASYNSYNFRQSCL $env(ASYNSYNFRQSCL)
+
+# define environemt variables and output library locatiobs
+#   RUNDIR: home directory
+#   SCRDIR: scripts directory
+#   RTLDIR: RTL directory
+#   REPDIR: design reports directory
+#   LOGDIR: run logs directory
+#   SIMDIR: logic simulation related files
+#   STADIR: Static Timing Analysis (STA) related files
+#   RCEDIR: RC extraction related files directory
+#   CTSDIR: Clock Tree Synthesis (CTS) related files
+#   ECODIR: ECO (design changes in p&r) related files
+#   ENCDIR: SoC Encounter related files
+#   GDSDIR: generated GDS directory
+#   NETDIR: netlists directory
+#   PWRDIR: power estimates directory
+set RUNDIR $env(RUNDIR)
+set SCRDIR $env(SCRDIR)
+set RTLDIR $env(RTLDIR)
+set REPDIR $env(REPDIR)
+set LOGDIR $env(LOGDIR)
+set NETDIR $env(NETDIR)
+set ENCDIR $env(ENCDIR)
+set STADIR $env(STADIR)
+set CTSDIR $env(CTSDIR)
+set ECODIR $env(ECODIR)
+set RCEDIR $env(RCEDIR)
+set GDSDIR $env(GDSDIR)
+set SIMDIR $env(SIMDIR)
+set PWRDIR $env(PWRDIR)
+
+# wait delay_sec before proceeding execution
+proc execWait {delay_sec} {
+  fconfigure stdin -blocking 0
+  for {set i 1} {$i<=$delay_sec} {incr i} {
+    after 1000 
+    gets stdin
+    set isBlocked [eval fblocked stdin]
+    if {!$isBlocked} {break}
+    set numbering "[$i]"
+    set backSpace ""
+    set backSpace [eval string repeat "\b" [string length $numbering]]
+    echo -n "$numbering"
+    if {$i < $delay_sec} {echo -n "$backSpace"} else {echo ""}
+  }
+  fconfigure stdin -blocking 1
+  return $isBlocked
+}
+
+# print synthesis start time
+set startTime [clock seconds]
+puts "\n@@ Static timing analysis with Synopsys PrimeTime started on [clock format $startTime]\n\n"
+
+# define PDK library
+set target_library      [list   $LIBDBB/$LIBNAM$LIBCOR.db                                  ]
+set link_library        [list * $LIBDBB/$LIBNAM$LIBCOR.db dw_foundation.sldb               ]
+set synthetic_library   [list                             dw_foundation.sldb               ]
+set synlib_library_list [list   DW01 DW02 DW03 DW04 DW05 DW06                              ]
+set search_path         [list . $SYNOPS/libraries/syn $SYNOPS/dw/syn_ver $SYNOPS/dw/sim_ver]
+
+# read verilog
+#read_verilog -hdl_compiler $NETDIR/${RUNNAM}.pnr.vh
+ read_verilog -hdl_compiler $NETDIR/${RUNNAM}.pnr.vh
+
+link_design fifo
+
+# read RC parasitics
+read_parasitics $RCEDIR/${RUNNAM}.spef.max
+
+# set timing constraints
+read_sdc $STADIR/${RUNNAM}.pnr.sdc
+
+# report timing
+report_timing -nets -cap -trans -sig 5                      > $STADIR/${RUNNAM}.timing.all.rep
+report_timing -nets -cap -trans -sig 5 -from  datain        > $STADIR/${RUNNAM}.timing.datain.rep
+report_timing -nets -cap -trans -sig 5 -to    dataout       > $STADIR/${RUNNAM}.timing.dataout.rep
+report_timing -nets -cap -trans -sig 5 -group clk_put     > $STADIR/${RUNNAM}.timing.clk_put.rep
+report_timing -nets -cap -trans -sig 5 -from  req_put     > $STADIR/${RUNNAM}.timing.req_put.rep
+report_timing -nets -cap -trans -sig 5 -to    spaceav > $STADIR/${RUNNAM}.timing.spaceav.rep
+report_timing -nets -cap -trans -sig 5 -group clk_get     > $STADIR/${RUNNAM}.timing.clk_get.rep
+report_timing -nets -cap -trans -sig 5 -from  req_get     > $STADIR/${RUNNAM}.timing.req_get.rep
+report_timing -nets -cap -trans -sig 5 -to    datav  > $STADIR/${RUNNAM}.timing.datav.rep
+
+# report references
+redirect $STADIR/${RUNNAM}.references.rep {report_ref}
+
+# generate sdf file 
+#write_sdf -context verilog -input_port_nets  -output_port_nets -no_timing_checks $STADIR/${RUNNAM}.sdf
+ write_sdf -levels 999 -context verilog  -no_edge -no_timing_checks $STADIR/${RUNNAM}.sdf
+#write_sdf -context verilog  -no_edge $STADIR/${RUNNAM}.sdf
+
+# print STA finish time
+set finishTime [clock seconds]
+puts "\n@@ Static timing analysis with Synopsys PrimeTime finished on [clock format $finishTime]\n"
+
+# calculate and print run time
+set baseTime [clock scan {00:00:00}]
+set diffTime [expr $baseTime+$finishTime-$startTime]
+puts "@@ Total runtime for static timing analysis with Synopsys PrimeTime is [clock format $diffTime -format {%H hours and %M minutes}]\n"
+
+# wait 3 seconds to exit
+echo -n "\r\nExecution finished! Exiting in 10 seconds. Press 'Enter' to stop exiting. "; set notPressed [execWait 3]
+
+if {$notPressed} {
+  exit
+}

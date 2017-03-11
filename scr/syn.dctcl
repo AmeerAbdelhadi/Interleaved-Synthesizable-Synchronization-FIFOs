@@ -1,0 +1,349 @@
+####################################################################################
+## Copyright (c) 2016, University of British Columbia (UBC)  All rights reserved. ##
+##                                                                                ##
+## Redistribution  and  use  in  source   and  binary  forms,   with  or  without ##
+## modification,  are permitted  provided that  the following conditions are met: ##
+##   * Redistributions   of  source   code  must  retain   the   above  copyright ##
+##     notice,  this   list   of   conditions   and   the  following  disclaimer. ##
+##   * Redistributions  in  binary  form  must  reproduce  the  above   copyright ##
+##     notice, this  list  of  conditions  and the  following  disclaimer in  the ##
+##     documentation and/or  other  materials  provided  with  the  distribution. ##
+##   * Neither the name of the University of British Columbia (UBC) nor the names ##
+##     of   its   contributors  may  be  used  to  endorse  or   promote products ##
+##     derived from  this  software without  specific  prior  written permission. ##
+##                                                                                ##
+## THIS  SOFTWARE IS  PROVIDED  BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" ##
+## AND  ANY EXPRESS  OR IMPLIED WARRANTIES,  INCLUDING,  BUT NOT LIMITED TO,  THE ##
+## IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE ##
+## DISCLAIMED.  IN NO  EVENT SHALL University of British Columbia (UBC) BE LIABLE ##
+## FOR ANY DIRECT,  INDIRECT,  INCIDENTAL,  SPECIAL,  EXEMPLARY, OR CONSEQUENTIAL ##
+## DAMAGES  (INCLUDING,  BUT NOT LIMITED TO,  PROCUREMENT OF  SUBSTITUTE GOODS OR ##
+## SERVICES;  LOSS OF USE,  DATA,  OR PROFITS;  OR BUSINESS INTERRUPTION) HOWEVER ##
+## CAUSED AND ON ANY THEORY OF LIABILITY,  WHETHER IN CONTRACT, STRICT LIABILITY, ##
+## OR TORT  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE ##
+## OF  THIS SOFTWARE,  EVEN  IF  ADVISED  OF  THE  POSSIBILITY  OF  SUCH  DAMAGE. ##
+####################################################################################
+
+####################################################################################
+##                Logic synthesis with  Synopsys Design Compiler                  ##
+##             Author: Ameer Abdelhadi (ameer.abdelhadi@gmail.com)                ##
+## Cell-based interleaved FIFO :: The University of British Columbia :: Nov. 2016 ##
+####################################################################################
+
+global env
+
+# define library design kit and synthesis tools variables
+# Change these links to your own design kit location
+#   TSMC65: library base link
+#   LIBNAM: library name
+#   LIBCOR: library corner, wc: worst case, tc: typical case, bc: best case
+#   LIBDBB: library DBB database link
+#   LIBLEF: a link to library LEF files
+#   LIBGDS: a link to library GDS files
+#   LIBVRL: a link to library Verilog files
+#   SYNOPS: a link to Synopsys tools directory
+#   TOPMOS: Verilog top module name
+set TSMC65 $env(TSMC65)
+set LIBNAM $env(LIBNAM)
+set LIBCOR $env(LIBCOR)
+set LIBDBB $env(LIBDBB)
+set LIBLEF $env(LIBLEF)
+set LIBGDS $env(LIBGDS)
+set LIBVRL $env(LIBVRL)
+set LIBMLW $env(LIBMLW)
+set SYNOPS $env(SYNOPSYS)
+
+
+# Design variables
+#   VERSTG   : Number of vertical stages
+#   HORSTG   : Number of horizontal stages
+#   OPRFRQ   : Bus  clock frequency for place and route
+#   DATAWD   : Data width
+#   RUNNAM   : Current run name, used as prefix to file names
+#   SYNFRQSCL: Core clock frequency for timing analysis
+set VERSTG        $env(VERSTG)
+set HORSTG        $env(HORSTG)
+set DATAWD        $env(DATAWD)
+set OPRFRQ        $env(OPRFRQ)
+set RUNNAM        $env(RUNNAM)
+set CLKDSYNFRQSCL $env(CLKDSYNFRQSCL)
+set ASYNSYNFRQSCL $env(ASYNSYNFRQSCL)
+
+# define environemt variables and output library locatiobs
+#   RUNDIR: home directory
+#   SCRDIR: scripts directory
+#   RTLDIR: RTL directory
+#   REPDIR: design reports directory
+#   LOGDIR: run logs directory
+#   SIMDIR: logic simulation related files
+#   STADIR: Static Timing Analysis (STA) related files
+#   RCEDIR: RC extraction related files directory
+#   CTSDIR: Clock Tree Synthesis (CTS) related files
+#   ECODIR: ECO (design changes in p&r) related files
+#   ENCDIR: SoC Encounter related files
+#   GDSDIR: generated GDS directory
+#   NETDIR: netlists directory
+#   PWRDIR: power estimates directory
+set RUNDIR $env(RUNDIR)
+set SCRDIR $env(SCRDIR)
+set RTLDIR $env(RTLDIR)
+set REPDIR $env(REPDIR)
+set LOGDIR $env(LOGDIR)
+set NETDIR $env(NETDIR)
+set ENCDIR $env(ENCDIR)
+set STADIR $env(STADIR)
+set CTSDIR $env(CTSDIR)
+set ECODIR $env(ECODIR)
+set RCEDIR $env(RCEDIR)
+set GDSDIR $env(GDSDIR)
+set SIMDIR $env(SIMDIR)
+set PWRDIR $env(PWRDIR)
+
+# wait delay_sec before proceeding execution
+proc execWait {delay_sec} {
+  fconfigure stdin -blocking 0
+  for {set i 1} {$i<=$delay_sec} {incr i} {
+    after 1000 
+    gets stdin
+    set isBlocked [eval fblocked stdin]
+    if {!$isBlocked} {break}
+    set numbering "[$i]"
+    set backSpace ""
+    set backSpace [eval string repeat "\b" [string length $numbering]]
+    echo -n "$numbering"
+    if {$i < $delay_sec} {echo -n "$backSpace"} else {echo ""}
+  }
+  fconfigure stdin -blocking 1
+  return $isBlocked
+}
+
+# print synthesis start time
+set startTime [clock seconds]
+puts "\n@@ Logic synthesis with Synopsys Design Compiler started on [clock format $startTime]\n\n"
+
+# create db, if missing
+#if (![file exist ./tcbn65lpwc.db]) {
+#  read_lib $LIBDBB/$LIBNAM$LIBCOR.lib
+#  write_lib $LIBNAM$LIBCOR -f db -o ./$LIBNAM$LIBCOR.db
+#}
+
+# define PDK library
+set search_path         [list . $SYNOPS/libraries/syn $SYNOPS/dw/syn_ver $SYNOPS/dw/sim_ver]
+set target_library      [list   $LIBDBB/$LIBNAM$LIBCOR.db                                  ]
+set link_library        [list * $LIBDBB/$LIBNAM$LIBCOR.db dw_foundation.sldb               ]
+set synthetic_library   [list                             dw_foundation.sldb               ]
+set synlib_library_list [list   DW01 DW02 DW03 DW04 DW05 DW06                              ]
+
+set_app_var mw_logic1_net "VDD"
+set_app_var mw_logic0_net "VSS"
+
+# Create Milkyway library project
+set mw_design_library $NETDIR/${RUNNAM}_MW_LIB
+create_mw_lib $mw_design_library \
+-technology           $LIBMLW/techfiles/tsmcn65_9lmT2.tf \
+-mw_reference_library $LIBMLW/cell_frame/$LIBNAM/ \
+-bus_naming_style {[%d]} -open
+check_library
+
+# define design lib
+define_design_lib ${RUNNAM}_lib -path $NETDIR/${RUNNAM}_lib
+
+# don't remove unconnected pin
+set verilogout_show_unconnected_pins "true"
+
+analyze -format verilog -lib ${RUNNAM}_lib $RTLDIR/config.h
+analyze -format verilog -lib ${RUNNAM}_lib $RTLDIR/fifo.v
+
+elaborate -lib ${RUNNAM}_lib fifo
+current_design fifo
+link
+uniquify
+check_design
+
+##########################
+# set timing constraints #
+##########################
+
+# period(ns) = 1000 / frequency (Mhz)
+set clkdOprClkPer  [expr 1000.0 / ($OPRFRQ * $CLKDSYNFRQSCL)]
+set asynOprClkPer  [expr 1000.0 / ($OPRFRQ * $ASYNSYNFRQSCL)]
+
+# define clocks; also for asp* handshaking signals to avoid hazards on these singals
+create_clock -period $clkdOprClkPer -name clk_get [get_port clk_get]
+create_clock -period $clkdOprClkPer -name clk_put [get_port clk_put]
+
+# use propagated clock latency for all clocks in the design
+set_propagated_clock [all_clocks]
+
+# set clock latency for all clocks
+set_clock_latency 0 [all_clocks]
+
+# set both edges transition times on the clock pins of all sequential elements clocked by all clocks
+set_clock_transition 0 [all_clocks]
+
+#  specifies the clock uncertainty (skew characteristics) of all clock networks.
+set_clock_uncertainty 0 [all_clocks]
+
+# timing paths from different timing domains are false
+ set_false_path -from clk_get -to clk_put
+ set_false_path -from clk_put -to clk_get
+
+  set_input_delay  [expr 2.0*$clkdOprClkPer] -clock clk_put [get_port datain ]
+  set_input_delay  [expr 2.0*$clkdOprClkPer] -clock clk_put [get_port req_put]
+  set_output_delay [expr 2.0*$clkdOprClkPer] -clock clk_put [get_port spaceav]
+  set_input_delay  [expr 2.0*$clkdOprClkPer] -clock clk_get [get_port req_get]
+  set_output_delay [expr 2.0*$clkdOprClkPer] -clock clk_get [get_port datav  ]
+  set_output_delay [expr 2.0*$clkdOprClkPer] -clock clk_get [get_port dataout]
+
+set_load       0 [all_outputs]
+set_resistance 0 [all_inputs]
+
+#set_input_delay  0.5 [all_inputs ]
+#set_output_delay 0.5 [all_outputs]
+#set_max_delay    0.2 -from [get_pins   */*reg*/*] -to [all_outputs         ]
+#set_max_delay    0.2 -from [get_pins */*/*reg*/*] -to [all_outputs         ]
+#set_max_delay    0.2 -from [all_inputs          ] -to [get_pins   */*reg*/*]
+#set_max_delay    0.2 -from [all_inputs          ] -to [get_pins */*/*reg*/*]
+#set_max_delay    0.2 -from [get_pins   */*reg*/*] -to [get_pins   */*reg*/*]
+#set_max_delay    0.2 -from [get_pins   */*reg*/*] -to [get_pins */*/*reg*/*]
+#set_max_delay    0.2 -from [get_pins */*/*reg*/*] -to [get_pins   */*reg*/*]
+#set_max_delay    0.2 -from [get_pins */*/*reg*/*] -to [get_pins */*/*reg*/*]
+
+# generate precompile reports
+redirect $REPDIR/${RUNNAM}.check_design.precompile.syn.rep {check_design}
+
+
+# eco cells
+#set_dont_use -power {tcbn65lpwc/G*  }
+# clock cells
+#set_dont_use -power {tcbn65lpwc/CK* }
+# scan cells
+#set_dont_use -power {tcbn65lpwc/SD* }
+#set_dont_use -power {tcbn65lpwc/SE* }
+# small cells
+#set_dont_use -power {tcbn65lpwc/*D0 }
+#set_dont_use -power {tcbn65lpwc/*D1 }
+# buffer cells
+#set_dont_use -power {tcbn65lpwc/BUF*}
+#set_dont_use -power {tcbn65lpwc/DEL*}
+# some complex cells
+#set_dont_use -power {tcbn65lpwc/AN* }
+#set_dont_use -power {tcbn65lpwc/AO2*}
+#set_dont_use -power {tcbn65lpwc/AO3*}
+#set_dont_use -power {tcbn65lpwc/BEN*}
+#set_dont_use -power {tcbn65lpwc/BHD*}
+#set_dont_use -power {tcbn65lpwc/BML*}
+#set_dont_use -power {tcbn65lpwc/CMP*}
+#set_dont_use -power {tcbn65lpwc/F*  }
+#set_dont_use -power {tcbn65lpwc/H*  }
+#set_dont_use -power {tcbn65lpwc/OA2*}
+#set_dont_use -power {tcbn65lpwc/OA3*}
+#set_dont_use -power {tcbn65lpwc/OR* }
+# xor cells
+#set_dont_use -power {tcbn65lpwc/X*  }
+# mux cells
+#set_dont_use -power {tcbn65lpwc/MUX*}
+# other complex cells
+#set_dont_use -power {tcbn65lpwc/IAO*}
+#set_dont_use -power {tcbn65lpwc/IIN*}
+#set_dont_use -power {tcbn65lpwc/IND*}
+#set_dont_use -power {tcbn65lpwc/INR*}
+#set_dont_use -power {tcbn65lpwc/IOA*}
+#set_dont_use -power {tcbn65lpwc/MOA*}
+# other other complex cells
+#set_dont_use -power {tcbn65lpwc/AOI*}
+#set_dont_use -power {tcbn65lpwc/MAOI222D*}
+#set_dont_use -power {tcbn65lpwc/MAOI22D*}
+#set_dont_use -power {tcbn65lpwc/OAI*}
+
+
+# set_dont_touch
+#set_dont_retime [get_cells dataout_sel_last_reg]
+set_dont_retime [get_cells *_sync_reg[*][*]]
+set_dont_retime [get_cells *th*_reg[*]]
+#--#set_dont_retime [get_cells dataout_stg_reg[*][*]]
+#--#set_dont_touch [get_nets dataout_evn]
+#--#set_dont_touch [get_nets dataout_odd]
+#--#set_dont_touch [get_nets dataout_stg]
+#set_multicycle_path 2 -setup -from [get_cells data_storage_reg[*][*]]  -to [get_ports dataout[*]]
+#set_max_delay 0 -from [get_cells dataout_sel_reg]  -to [get_ports dataout[*]]
+
+#set_max_delay 0 -to [get_ports dataout[*]]
+
+# disable timing checks for async reset
+set_false_path -from rst
+set_ideal_network -no_propagate [get_ports rst]
+set_disable_timing [get_ports rst]
+
+#set_max_delay 10 -from dataout_stg_reg[*][*]  -to dataout[*]
+#set_max_delay 10 -from dataout_stg_reg[*][*]  -to dataout[*]
+
+
+#set_max_delay 0 -from [get_pins ohtV_r*/Q*] -to [get_pins dataout*/e*]
+
+# wait 3 seconds to proceed
+echo -n "\r\nCompiling design in 3 seconds. Press 'Enter' to stop execution. "; set notPressed [execWait 3]
+
+if {$notPressed} {
+
+# compile design to force implementations
+  compile_ultra -no_autoungroup -timing_high_effort_script
+  compile_ultra -no_autoungroup -timing_high_effort_script -incremental
+
+# compile_ultra -no_autoungroup -timing_high_effort_script -retime
+# compile_ultra -no_autoungroup -timing_high_effort_script -retime -incremental
+
+# compile_ultra                 -timing_high_effort_script -retime
+# compile_ultra                 -timing_high_effort_script -retime -incremental 
+
+  # other compile options
+  #   compile_ultra
+  #   compile_ultra -incremental
+  #   compile -ungroup_all -map_effort medium
+  #   compile -incremental_mapping -map_effort medium
+  #   compile -incr
+  #   compile -area_effort none -power_effort none
+
+  # ungroup hirarchies to faltten design
+  # ungroup -flatten -all
+
+  # generate post-compile reports
+  redirect $REPDIR/${RUNNAM}.check_design.postcompile.syn.rep {check_design                        }
+  redirect $REPDIR/${RUNNAM}.report_constraint.syn.rep        {report_constraint -all_violators    }
+  redirect $REPDIR/${RUNNAM}.report_area.syn.rep              {report_area      -nosplit -hierarchy}
+  redirect $REPDIR/${RUNNAM}.report_design.syn.rep            {report_design    -nosplit           }
+  redirect $REPDIR/${RUNNAM}.report_port.syn.rep              {report_port      -nosplit           }
+  redirect $REPDIR/${RUNNAM}.report_clocks.syn.rep            {report_clocks    -nosplit           }
+  redirect $REPDIR/${RUNNAM}.report_cell.syn.rep              {report_cell      -nosplit           }
+  redirect $REPDIR/${RUNNAM}.report_timing.syn.rep            {report_timing    -nosplit           }
+  redirect $REPDIR/${RUNNAM}.report_power.syn.rep             {report_power     -nosplit           }
+  redirect $REPDIR/${RUNNAM}.report_ref.syn.rep               {report_ref       -nosplit -hierarchy}
+  redirect $REPDIR/${RUNNAM}.report_resources.syn.rep         {report_resources -nosplit -hierarchy}
+
+  # write timing constraints
+  write_sdc -nosplit $STADIR/${RUNNAM}.syn.sdc
+  write_sdf          $STADIR/${RUNNAM}.syn.sdf
+
+  # write verilog netlist
+  change_names -rules verilog -hierarchy
+  write -format verilog -hierarchy -out $NETDIR/${RUNNAM}.syn.vh
+  write -format ddc     -hierarchy -out $NETDIR/${RUNNAM}.syn.ddc
+  write_milkyway -overwrite -output preLO
+}
+
+# print synthesis finish time
+set finishTime [clock seconds]
+puts "\n@@ Logic synthesis with Synopsys Design Compiler finished on [clock format $finishTime]\n"
+
+# calculate and print runtime
+set baseTime [clock scan {00:00:00}]
+set diffTime [expr $baseTime+$finishTime-$startTime]
+puts "@@ Total runtime for logic synthesis with Synopsys Design Compiler is [clock format $diffTime -format {%H hours and %M minutes}]\n"  
+
+# wait 3 seconds to exit
+echo -n "\r\nExecution finished! Exiting in 3 seconds. Press 'Enter' to stop exiting. "; set notPressed [execWait 3]
+
+if {$notPressed} {
+  exit
+}
+
